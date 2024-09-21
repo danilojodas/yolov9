@@ -81,6 +81,8 @@ def run(
         dataset = LoadImages(source, img_size=imgsz, stride=stride, auto=pt, vid_stride=vid_stride)
     vid_path, vid_writer = [None] * bs, [None] * bs
 
+    bboxes = []
+
     # Run inference
     model.warmup(imgsz=(1 if pt or model.triton else bs, 3, *imgsz))  # warmup
     seen, windows, dt = 0, [], (Profile(), Profile(), Profile())
@@ -103,6 +105,9 @@ def run(
 
         # Second-stage classifier (optional)
         # pred = utils.general.apply_classifier(pred, classifier_model, im, im0s)
+
+        # Coordinates of each predicted bounding boxes
+        coordinates = []
 
         # Process predictions
         for i, det in enumerate(pred):  # per image
@@ -131,6 +136,9 @@ def run(
 
                 # Write results
                 for *xyxy, conf, cls in reversed(det):
+                    xywh = (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist()  # normalized xywh
+                    coordinates.append(xywh)
+
                     if save_txt:  # Write to file
                         xywh = (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist()  # normalized xywh
                         line = (cls, *xywh, conf) if save_conf else (cls, *xywh)  # label format
@@ -172,6 +180,7 @@ def run(
                         save_path = str(Path(save_path).with_suffix('.mp4'))  # force *.mp4 suffix on results videos
                         vid_writer[i] = cv2.VideoWriter(save_path, cv2.VideoWriter_fourcc(*'mp4v'), fps, (w, h))
                     vid_writer[i].write(im0)
+        bboxes.append(coordinates)
 
         # Print time (inference-only)
         LOGGER.info(f"{s}{'' if len(det) else '(no detections), '}{dt[1].dt * 1E3:.1f}ms")
@@ -185,6 +194,7 @@ def run(
     if update:
         strip_optimizer(weights[0])  # update model (to fix SourceChangeWarning)
 
+    return bboxes
 
 def parse_opt():
     parser = argparse.ArgumentParser()
@@ -223,7 +233,21 @@ def parse_opt():
 
 def main(opt):
     # check_requirements(exclude=('tensorboard', 'thop'))
-    run(**vars(opt))
+    bboxes = run(**vars(opt))
+
+    # Get image size
+    imgsz = opt.imgsz
+
+    # Convert the normalized coordinates to pixel coordinates
+    for i in range(len(bboxes)):
+        for j in range(len(bboxes[i])):
+            # Convert to pixels using the original image size
+            bboxes[i][j][0] = int(bboxes[i][j][0] * imgsz[0]) 
+            bboxes[i][j][2] = int(bboxes[i][j][2] * imgsz[0])
+            bboxes[i][j][1] = int(bboxes[i][j][1] * imgsz[0])
+            bboxes[i][j][3] = int(bboxes[i][j][3] * imgsz[0])
+    
+    print('bboxes: ', bboxes)
 
 
 if __name__ == "__main__":
