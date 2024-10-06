@@ -70,6 +70,8 @@ def run(
 
     bboxes = []
 
+    vid_path, vid_writer = [None] * bs, [None] * bs
+
     # Run inference
     model.warmup(imgsz=(1 if pt or model.triton else bs, 3, *imgsz))  # warmup
     seen, windows, dt = 0, [], (Profile(), Profile(), Profile())
@@ -105,6 +107,7 @@ def run(
             p = Path(p)  # to Path
             s += '%gx%g ' % im.shape[2:]  # print string
             gn = torch.tensor(im0.shape)[[1, 0, 1, 0]]  # normalization gain whwh
+            annotator = Annotator(im0, line_width=3, example=str(names))
 
             if len(det):
                 # Rescale boxes from img_size to im0 size
@@ -120,6 +123,51 @@ def run(
                     xywh = (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist()  # normalized xywh
                     coord = torch.tensor(xyxy).view(1, 4).tolist()[0]
                     coordinates.append(coord)
+
+                    c = int(cls)  # integer class
+                    label = None
+
+                    x1, y1 = 0, im0.shape[0] - int(im0.shape[0] / 4)
+                    x2, y2 = im0.shape[1], im0.shape[0] - int(im0.shape[0] / 4)  
+
+                    # Check if coordinates are below x1, x2, y1, y2
+                    if xyxy[1] > y1:
+                        annotator.box_label(xyxy, label, color=colors(6, True))    
+                    else:              
+                        annotator.box_label(xyxy, label, color=colors(c, True))
+            
+            im0 = annotator.result()
+
+            # Draw a line in the image
+            x1, y1 = 0, im0.shape[0] - int(im0.shape[0] / 4)
+            x2, y2 = im0.shape[1], im0.shape[0] - int(im0.shape[0] / 4)
+            im0 = cv2.line(im0, (x1, y1), (x2, y2), (0, 255, 0), 2)
+
+
+            #if platform.system() == 'Linux' and p not in windows:
+            #    windows.append(p)
+            #    cv2.namedWindow(str(p), cv2.WINDOW_NORMAL | cv2.WINDOW_KEEPRATIO)  # allow window resize (Linux)
+            #    cv2.resizeWindow(str(p), im0.shape[1], im0.shape[0])
+            #    cv2.imshow(str(p), im0)
+            #    cv2.waitKey(200)
+
+            if dataset.mode == 'image':
+                save_path = 'runs/detect/im.jpg'
+                cv2.imwrite(save_path, im0)
+            else:  # 'video' or 'stream'
+                save_path = 'runs/detect/video.mp4'
+                if vid_path[i] != save_path:  # new video
+                    vid_path[i] = save_path
+                    if isinstance(vid_writer[i], cv2.VideoWriter):
+                        vid_writer[i].release()  # release previous video writer
+                    if vid_cap:  # video
+                        fps = vid_cap.get(cv2.CAP_PROP_FPS)
+                        w = int(vid_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                        h = int(vid_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                    else:  # stream
+                        fps, w, h = 30, im0.shape[1], im0.shape[0]
+                    vid_writer[i] = cv2.VideoWriter(save_path, cv2.VideoWriter_fourcc(*'mp4v'), fps, (w, h))
+                vid_writer[i].write(im0)                               
  
         bboxes.append(coordinates)
 
@@ -208,10 +256,21 @@ def parse_opt():
 def main(opt):
     # Predict and get the crops
     crops = predict(opt.source, opt.weights, opt.imgsz, opt.conf_thres, opt.device)
+    
+    print('Prediction finished')
 
     # Save each cropped image
     #for i, crop in enumerate(crops):
     #    cv2.imwrite(f'output{i}.png', crop)
+
+    plt.switch_backend('TkAgg')
+
+    for i, crop in enumerate(crops):
+        # Convert to RGB
+        cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
+
+        plt.imshow(crop)
+        plt.show()
 
 if __name__ == "__main__":
     opt = parse_opt()
